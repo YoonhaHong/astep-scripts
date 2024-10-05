@@ -1,0 +1,4 @@
+python3.12 scripts/run_test.py -M 5 -t 200 -n w01s06_runtest_t200_5s
+python3.12 scripts/decode_postRun.py -f ~/JH_work/astep-fw-bobae/sw/run_w01s06_runtest_t200_5s_w01s06_runtest_t200_5s_20240807_225733.log
+python3.12 scripts/generate_event_display_bb_update.py -d ~/JH_work/astep-fw-bobae/sw/ -if run_w01s06_runtest_t200_5s_w01s06_runtest_t200_5s_20240807_225733_offline.csv
+
