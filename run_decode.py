@@ -6,8 +6,11 @@ import logging
 import csv
 import argparse #add
 import pandas as pd
+import yaml
+import ast
 import sys
 import logging
+from decode_offline import decode_offline
 
 layer, chip = 0,0
 pixel = [layer, chip, 0, 11] #layer, chip, row, column
@@ -17,35 +20,9 @@ async def main(args):
 
     fname = f"THR{args.threshold}_{args.name}_{time.strftime("%Y%m%d_%H%M%S")}" 
     bitpath = args.outdir+"/run_"+fname+".log"
-    logname = args.outdir+"/runlog_"+fname+".log"
-    csvpath = args.outdir+'/'+fname+".csv"
+    yamlpath = args.outdir+"/"+fname+'_'+args.yaml+".yml"
 
     bitfile = open(bitpath,'w')
-    
-    formatter = logging.Formatter('%(asctime)s:%(msecs)d.%(name)s.%(levelname)s:%(message)s')
-    fh = logging.FileHandler(logname)
-    fh.setFormatter(formatter)
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logging.getLogger().addHandler(sh) 
-    logging.getLogger().addHandler(fh)
-    logging.getLogger().setLevel(logging.INFO)
-    logger = logging.getLogger(__name__)
-
-    csvframe =pd.DataFrame(columns = [
-                'readout',
-                'ChipID',
-                'payload',
-                'location',
-                'isCol',
-                'timestamp',
-                'tot_msb',
-                'tot_lsb',
-                'tot_total',
-                'tot_us',
-                'fpga_ts'
-        ])
-
 
     print("creating object")
 #    print(f"pixel[r,c]={pixel}")
@@ -66,7 +43,19 @@ async def main(args):
     
     print("initializing asic")
     await astro.asic_init(yaml=args.yaml, analog_col=[layer, chip ,pixel[3]])
-    print(f"Header: {astro.get_log_header(layer, chip)}")
+    print(f"{astro.get_log_header(layer, chip)}")
+
+    data_string = astro.get_log_header(layer, chip)
+    data_dict = {}
+    for line in data_string.strip().split('\n'):
+        key, value = line.split(': ', 1)
+        data_dict[key] = ast.literal_eval(value)
+
+# YAML 파일로 저장
+    with open(yamlpath, 'w') as yaml_file:
+        yaml.dump(data_dict, yaml_file, default_flow_style=False)
+
+    print("YAML 파일로 저장되었습니다: data.yaml")
 
     print("initializing voltage")
     #await astro.init_voltages() ## th in mV
@@ -81,32 +70,23 @@ async def main(args):
     for r in range(0,35,1):
         for c in range(3,35,1):
             await astro.enable_pixel(layer,chip,r,c)
-    """
+
     # Masking pixels
     # Read noise scan summary file
     if args.noisescaninfo is not None:
         print("masking pixels")
-        noise_input_file = open(args.noisescaninfo, 'r')
-        lines = noise_input_file.readlines()
-    #print(lines[0])
-        del lines[0] # remove header
-    # Get counts
+
+        nss = pd.read_csv(args.noisescaninfo)
+        pixels_to_mask = nss[nss['Count'] > args.noisethreshold]
+    
         count_vals=0
-        for line in lines:
-            noise_val = int(line.split('\t')[2])
-            col_val = int(line.split('\t')[0])
-            row_val = int(line.split('\t')[1])
-            if noise_val > 10:
-                #astro.disable_pixel(col_val,row_val)
-                await astro.disable_pixel(row_val,col_val)
-                print("(",col_val,",",row_val,")=",noise_val," larger than 10")
-                count_vals = count_vals+1
-# for beam_test.py
-            else:
-                await astro.enable_pixel(row_val,col_val)
+        for index, row in pixels_to_mask.iterrows():
+            print(f"Row: {row['Row']}, Col: {row['Col']}, Disable: {row['Count']}")
+            astro.disable_pixel(layer, chip, int(row['Col']), int(row['Row']))
+            count_vals+=1
+
         print(count_vals, " pixels are disable !")
         print("Active pixels ~ ",1-(count_vals/(35*35)), " %.")
-    """
 
 
 
@@ -114,8 +94,6 @@ async def main(args):
     #await astro.init_injection(inj_voltage=300)
 
     print("final configs")
-    #print(f"Header: {astro.get_log_header()}")
-    #await astro.asic_configure()
     print(f"Header: {astro.get_log_header(layer, chip)}")
     await astro.asic_configure(layer)
     
@@ -150,25 +128,15 @@ async def main(args):
     start_intime = time.time()
     while (time.time() < end_time): # Loop continues 
         buff, readout = await(astro.get_readout())
-        if not sum(readout[0:2])==510: #avoid printing out if first 2 bytes are "ff ff" (string is just full of ones)
-        #if buff>4:
-            inc += 1
-            if inc<0:
-                continue
+        #if not sum(readout[0:2])==510: #avoid printing out if first 2 bytes are "ff ff" (string is just full of ones)
+        if buff>0:
             hit = readout[:buff] 
-            #print(f"hit={hit}, buff={buff}")
-            #print("print(binascii.hexlify(hit))")
-            #print(binascii.hexlify(hit))
+
             readout_data = readout[:buff]
-            logger.info(binascii.hexlify(readout_data))
-            #print(hex(readout[:buff]))
+
             #bitfile.write(f"{str(binascii.hexlify(readout))}\n")
             bitfile.write(f"{str(binascii.hexlify(readout_data))}\n")
             #print("astro.decode_readout(hit, inc)")
-            astro.decode_readout(hit, inc) 
-            hits = astro.decode_readout(hit, inc)
-            csvframe = pd.concat([csvframe, hits])
-        
             event += 1        
 
         
@@ -186,12 +154,15 @@ async def main(args):
     print(binascii.hexlify(readout))
     print(f"{buff} bytes in buffer")
 
-    csvframe.index.name = "dec_order"
-    csvframe.to_csv(csvpath, sep='\t') 
+    #csvframe.index.name = "dec_order"
+    #csvframe.to_csv(csvpath, sep='\t') 
 
     bitfile.close() # Close open file       
     astro.close_connection() # Closes SPI
-    logger.info("Program terminated successfully")
+
+    print("Decoding Starting...")
+    decode_offline(bitpath)
+
 
 
 
@@ -210,6 +181,9 @@ if __name__ == "__main__":
 
     parser.add_argument('-ns', '--noisescaninfo', action='store', required=False, type=str, default ='noise_scan_summary_apr29_newfw_aps3w08s05_noise_t100_3s.csv',
                     help = 'filepath noise scan summary file containing chip noise infomation.')
+    
+    parser.add_argument('-nt', '--noisethreshold', type = int, action='store', default=4,
+                    help = 'Noise count threshold for masking. DEFAULT > 4')
     
 #    parser.add_argument('-i', '--inject', action='store_true', default=False, required=False,
 #                    help =  'Turn on injection. Default: No injection')

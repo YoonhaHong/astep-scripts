@@ -41,7 +41,16 @@ async def main(args,pixel):
 
     print("opening fpga")
     #await astro.open_fpga()
-    await astro.open_fpga(cmod=False, uart=False)
+    #await astro.open_fpga(cmod=False, uart=False)
+
+    while True:
+        try:
+            await astro.open_fpga(cmod=False, uart=False)
+            print("FPGA opened successfully.")
+            break  # 성공하면 반복문 탈출
+        except:
+            print("No response, retrying...")
+            time.sleep(10)
 
 #    print("dump fpga") # add
 #    await astro.dump_fpga() # add
